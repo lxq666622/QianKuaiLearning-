@@ -32,9 +32,9 @@ workflows:
             done
           fi
           flutter --version
-          echo "=== Repo root contents ==="
-          ls -laR "$(pwd)" | head -100
-      - name: Step 1 - 🔎 Auto detect project dir (find pubspec.yaml anywhere)
+          echo "=== Repo root contents (first 60 entries) ==="
+          ls -laR "$(pwd)" | head -60
+      - name: Step 1 - Auto detect project dir (find pubspec.yaml)
         script: |
           set -ex
           DETECTED=$(find "$(pwd)" -name "pubspec.yaml" -not -path "*/build/*" -not -path "*/.dart_tool/*" -not -path "*/.symlinks/*" | head -1)
@@ -43,48 +43,37 @@ workflows:
             exit 2
           fi
           PROJECT_DIR=$(dirname "$DETECTED")
-          echo "✅✅✅ Detected PROJECT_DIR=$PROJECT_DIR"
+          echo "Detected PROJECT_DIR=$PROJECT_DIR"
           echo "export PROJECT_DIR=\"$PROJECT_DIR\"" > /tmp/project_dir.sh
-      - name: Step 2 - Verify files
+      - name: Step 2 - Verify critical files exist
         script: |
           set -ex
           source /tmp/project_dir.sh
           cd "$PROJECT_DIR"
-          echo "=== Working dir: $(pwd) ==="
+          echo "Working dir: $(pwd)"
           ls -la
           for f in pubspec.yaml lib/main.dart lib/app.dart; do
-            [ -f "$f" ] && echo "✅ Found: $f" || echo "❌ MISSING: $f"
+            if [ -f "$f" ]; then echo "OK: found $f ($(wc -c < $f) bytes)"; else echo "FAIL: MISSING $f"; fi
           done
-      - name: Step 3 - 🛠️ HEAL project: auto-create android/ ios/ folders + fix AndroidX
+      - name: Step 3 - Auto create android and ios folders + fix Android embedding V2
         script: |
           set -ex
           source /tmp/project_dir.sh
           if [ -n "$FLUTTER_ROOT" ]; then export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"; fi
           cd "$PROJECT_DIR"
-          if [ ! -d android ] || [ ! -d ios ] || [ ! -f android/app/src/main/AndroidManifest.xml ] || [ ! -f ios/Runner.xcodeproj/project.pbxproj ]; then
-            echo "🚑 Running: flutter create --platforms=android,ios --org com.qiankuai.learning --project-name qiankuailearning .  (auto-generate android/ and ios/ folders)"
+          if [ ! -d android ] || [ ! -d ios ] || [ ! -f ios/Runner.xcodeproj/project.pbxproj ]; then
+            echo "Running flutter create --platforms=android,ios --org com.qiankuai.learning --project-name qiankuailearning ."
             flutter create --platforms=android,ios --org com.qiankuai.learning --project-name qiankuailearning . --overwrite 2>&1 | tail -60 || true
           fi
-          # Fix Android embedding v2 (audioplayers requirement): update AndroidManifest.xml
           if [ -f android/app/src/main/AndroidManifest.xml ]; then
-            echo "✅ Found AndroidManifest.xml, patching Android embedding..."
-            if grep -q "io.flutter.embedding.android.FlutterActivity" android/app/src/main/AndroidManifest.xml; then
-              echo "✅ Already V2 embedding"
-            else
-              # Replace activity class name with FlutterFragmentActivity (V2 embedding)
-              sed -i.bak 's|android:name=".*MainActivity"|android:name="io.flutter.embedding.android.FlutterFragmentActivity"|g' android/app/src/main/AndroidManifest.xml || true
-              # Ensure meta-data for FlutterEmbedding
-              if ! grep -q "flutterEmbedding" android/app/src/main/AndroidManifest.xml; then
-                awk '/<application>/ {print; print "        <meta-data android:name=\"flutterEmbedding\" android:value=\"2\" />"; next}1' android/app/src/main/AndroidManifest.xml > /tmp/manifest_patched.xml
-                mv /tmp/manifest_patched.xml android/app/src/main/AndroidManifest.xml
-              fi
+            echo "Found AndroidManifest.xml, ensure Flutter Embedding V2 meta-data"
+            if ! grep -q "flutterEmbedding" android/app/src/main/AndroidManifest.xml; then
+              awk '/<application>/ {print; print "        <meta-data android:name=\"flutterEmbedding\" android:value=\"2\" />"; next}1' android/app/src/main/AndroidManifest.xml > /tmp/manifest_patched.xml
+              mv /tmp/manifest_patched.xml android/app/src/main/AndroidManifest.xml
             fi
-            cat android/app/src/main/AndroidManifest.xml
-          else
-            echo "⚠️  No AndroidManifest.xml, verify android/ was created:"
-            ls -la android || true
+            sed -i.bak 's|android:name=".*MainActivity"|android:name="io.flutter.embedding.android.FlutterFragmentActivity"|g' android/app/src/main/AndroidManifest.xml || true
           fi
-      - name: Step 4 - Flutter clean + pub get
+      - name: Step 4 - Flutter clean and pub get
         script: |
           set -ex
           source /tmp/project_dir.sh
@@ -93,62 +82,50 @@ workflows:
           mkdir -p "$PUB_CACHE"
           cd "$PROJECT_DIR"
           flutter clean || true
-          echo "=== Running flutter pub get (full log tail 80) ==="
-          flutter pub get 2>&1 | tail -80
-      - name: Step 5 - Build Android APK (release, print last 100 lines on error)
+          echo "Running flutter pub get"
+          flutter pub get 2>&1 | tail -60
+      - name: Step 5 - Build Android APK (release)
         script: |
           set -ex
           source /tmp/project_dir.sh
           if [ -n "$FLUTTER_ROOT" ]; then export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"; fi
           cd "$PROJECT_DIR"
-          echo "=== flutter build apk --release --no-tree-shake-icons ==="
           set +e
           flutter build apk --release --no-tree-shake-icons > /tmp/build_apk.log 2>&1
           APK_RC=$?
           set -e
           echo "=== APK build last 100 lines ==="
           tail -100 /tmp/build_apk.log
-          echo
-          if [ $APK_RC -eq 0 ]; then
-            echo "✅ APK build succeeded (rc=$APK_RC)"
-          else
-            echo "⚠️  APK build exited with rc=$APK_RC - check log above for errors (often Android SDK licenses)"
-          fi
+          echo "APK build exited with rc=$APK_RC"
           if [ -f build/app/outputs/flutter-apk/app-release.apk ]; then
-            echo "✅ APK FOUND at $(pwd)/build/app/outputs/flutter-apk/app-release.apk: $(wc -c < build/app/outputs/flutter-apk/app-release.apk) bytes"
+            echo "SUCCESS: APK found at $(pwd)/build/app/outputs/flutter-apk/app-release.apk ($(wc -c < build/app/outputs/flutter-apk/app-release.apk) bytes)"
           else
-            echo "WARNING: APK not found at $(pwd)/build/app/outputs/flutter-apk/app-release.apk"
+            echo "WARN: APK not found, listing build dir:"
             find build -name "*.apk" 2>/dev/null || true
           fi
-      - name: Step 6 - Build iOS IPA (no code signing, print last 100 lines on error)
+      - name: Step 6 - Build iOS IPA (no code signing)
         script: |
           set -ex
           source /tmp/project_dir.sh
           if [ -n "$FLUTTER_ROOT" ]; then export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"; fi
           cd "$PROJECT_DIR"
-          echo "=== flutter build ios --release --no-codesign --no-tree-shake-icons ==="
           set +e
           flutter build ios --release --no-codesign --no-tree-shake-icons > /tmp/build_ios.log 2>&1
           IOS_RC=$?
           set -e
           echo "=== iOS build last 100 lines ==="
           tail -100 /tmp/build_ios.log
-          echo
-          if [ $IOS_RC -eq 0 ]; then
-            echo "✅ iOS build succeeded (rc=$IOS_RC)"
-          else
-            echo "⚠️  iOS build exited with rc=$IOS_RC (often Xcode/cocoaPods issues, check log)"
-          fi
-          echo "=== Looking for Runner.app ==="
+          echo "iOS build exited with rc=$IOS_RC"
+          echo "Looking for Runner.app:"
           find build -name "Runner.app" -type d 2>/dev/null | head -5
           if [ -d build/ios/iphoneos/Runner.app ]; then
-            echo "✅ Runner.app FOUND, packaging IPA now..."
+            echo "SUCCESS: Runner.app found, packaging IPA"
             mkdir -p build/ios/iphoneos/Payload
             cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
             cd build/ios/iphoneos && zip -r QianKuaiLearning_unsigned.ipa Payload
-            echo "✅ IPA CREATED: $(pwd)/QianKuaiLearning_unsigned.ipa → $(wc -c < QianKuaiLearning_unsigned.ipa) bytes"
+            echo "SUCCESS: IPA created at $(pwd)/QianKuaiLearning_unsigned.ipa ($(wc -c < QianKuaiLearning_unsigned.ipa) bytes)"
           else
-            echo "WARNING: Runner.app not found under $(pwd)/build/ios/iphoneos"
+            echo "WARN: Runner.app not found under build/ios/iphoneos, listing build dir:"
             find build -maxdepth 6 -type d 2>/dev/null | tail -40
           fi
     artifacts:
