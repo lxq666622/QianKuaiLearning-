@@ -1,0 +1,113 @@
+workflows:
+  default-workflow:
+    name: Default Workflow
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      flutter: 3.19.6
+      xcode: latest
+      cocoapods: default
+      groups:
+        - flutter
+      vars:
+        CI: "true"
+        PUB_CACHE: "$HOME/.pub-cache"
+        PROJECT_DIR: "."
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: "main"
+          include: true
+    scripts:
+      - name: Step 0 - Ensure Flutter SDK is in PATH
+        script: |
+          set -ex
+          if [ -n "$FLUTTER_ROOT" ] && [ -x "$FLUTTER_ROOT/bin/flutter" ]; then
+            export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"
+          elif command -v flutter >/dev/null 2>&1; then
+            echo "Flutter already on PATH: $(which flutter)"
+          else
+            for d in "$HOME/programs/flutter" "/usr/local/share/flutter" "/opt/flutter"; do
+              if [ -x "$d/bin/flutter" ]; then
+                export PATH="$d/bin:$d/bin/cache/dart-sdk/bin:$PATH"
+                break
+              fi
+            done
+          fi
+          echo "PATH=$PATH"
+          which flutter
+          flutter --version
+          echo "--- ls -la repo root ---"
+          ls -la
+      - name: Step 1 - Verify 3 CRITICAL files (MUST all be ✅)
+        script: |
+          set -ex
+          cd "$PROJECT_DIR"
+          echo "=== Current directory ==="
+          pwd
+          ls -la
+          echo
+          echo "=== 3 CRITICAL files ==="
+          for f in pubspec.yaml lib/main.dart lib/app.dart; do
+            if [ -f "$f" ]; then
+              echo "✅ Found: $f (bytes=$(wc -c < $f))"
+            else
+              echo "❌ MISSING: $f in $(pwd)"
+            fi
+          done
+          echo
+          echo "=== Optional subdirectories ==="
+          for d in lib/models lib/providers lib/views lib/widgets lib/services lib/utils assets; do
+            if [ -d "$d" ]; then
+              echo "✅ Found: $d/"
+            else
+              echo "⚠️  MISSING: $d/ (upload if missing)"
+            fi
+          done
+      - name: Step 2 - flutter clean & pub get
+        script: |
+          set -ex
+          if [ -n "$FLUTTER_ROOT" ]; then export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"; fi
+          export PUB_CACHE="$HOME/.pub-cache"
+          mkdir -p "$PUB_CACHE"
+          cd "$PROJECT_DIR"
+          if [ ! -f pubspec.yaml ]; then
+            echo "FATAL: pubspec.yaml NOT FOUND in $(pwd)"
+            exit 2
+          fi
+          flutter clean || true
+          flutter pub get
+      - name: Step 3 - Create platform dirs (safety net)
+        script: |
+          cd "$PROJECT_DIR"
+          mkdir -p android/app/src/main ios android/gradle/wrapper
+          touch ~/.android/repositories.cfg || true
+      - name: Step 4 - Build Android APK (release)
+        script: |
+          set -ex
+          if [ -n "$FLUTTER_ROOT" ]; then export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"; fi
+          cd "$PROJECT_DIR"
+          flutter build apk --release --no-tree-shake-icons || true
+      - name: Step 5 - Build iOS IPA (no code signing)
+        script: |
+          set -ex
+          if [ -n "$FLUTTER_ROOT" ]; then export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"; fi
+          cd "$PROJECT_DIR"
+          flutter build ios --release --no-codesign --no-tree-shake-icons || true
+          if [ -d build/ios/iphoneos/Runner.app ]; then
+            mkdir -p build/ios/iphoneos/Payload
+            cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
+            cd build/ios/iphoneos && zip -r QianKuaiLearning_unsigned.ipa Payload
+          fi
+    artifacts:
+      - build/app/outputs/flutter-apk/app-release.apk
+      - build/ios/iphoneos/QianKuaiLearning_unsigned.ipa
+      - build/ios/iphoneos/Runner.app
+    publishing:
+      email:
+        recipients:
+          - 2150835707@qq.com
+        notify:
+          success: true
+          failure: true
