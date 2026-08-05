@@ -15,9 +15,7 @@ workflows:
         EXPORT_NO_SIGNING: "1"
         CODE_SIGNING_ALLOWED: "NO"
         CODE_SIGNING_REQUIRED: "NO"
-        CODE_SIGNING_IDENTITY: ""
-        PROVISIONING_PROFILE_SPECIFIER: ""
-        EXPANDED_CODE_SIGN_IDENTITY: ""
+        CM_CUSTOM_SIGNING_VARS_SET: "yes"
     triggering:
       events:
         - push
@@ -40,6 +38,12 @@ workflows:
           fi
           echo "$PATH" > /tmp/flutter_path.env
           echo "export PATH=\"$PATH\"" > /tmp/flutter_path.sh
+          export CM_CODE_SIGNING_IDENTITY=""
+          export CM_PROVISIONING_PROFILE_SPECIFIER=""
+          export CM_EXPANDED_CODE_SIGN_IDENTITY=""
+          echo "export CM_CODE_SIGNING_IDENTITY=\"\"" > /tmp/custom_signing.sh
+          echo "export CM_PROVISIONING_PROFILE_SPECIFIER=\"\"" >> /tmp/custom_signing.sh
+          echo "export CM_EXPANDED_CODE_SIGN_IDENTITY=\"\"" >> /tmp/custom_signing.sh
           flutter --version
       - name: Step 1 - Find pubspec.yaml project root
         script: |
@@ -74,6 +78,7 @@ workflows:
           set -e
           source /tmp/project_dir.sh
           source /tmp/flutter_path.sh
+          source /tmp/custom_signing.sh
           cd "$PROJECT_DIR"
           echo "=== Backup original lib ==="
           rm -rf /tmp/lib_backup
@@ -153,6 +158,7 @@ workflows:
           set -e
           source /tmp/project_dir.sh
           source /tmp/flutter_path.sh
+          source /tmp/custom_signing.sh
           cd "$PROJECT_DIR"
           flutter clean || true
           echo "=== flutter pub get ==="
@@ -191,6 +197,7 @@ workflows:
           set -e
           source /tmp/project_dir.sh
           source /tmp/flutter_path.sh
+          source /tmp/custom_signing.sh
           REPO_ROOT=$(pwd)
           cd "$PROJECT_DIR"
           set +e
@@ -221,6 +228,7 @@ workflows:
           set -e
           source /tmp/project_dir.sh
           source /tmp/flutter_path.sh
+          source /tmp/custom_signing.sh
           REPO_ROOT=$(pwd)
           cd "$PROJECT_DIR"
           export EXPORT_NO_SIGNING=1
