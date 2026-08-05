@@ -10,8 +10,8 @@ class WordCardView extends ConsumerStatefulWidget {
   const WordCardView({super.key});
   @override ConsumerState<WordCardView> createState() => _WordCardViewState();
 }
-class _WordCardViewState extends ConsumerState<WordCardView>
-    with SingleTickerProviderStateMixin {
+class _WordCardViewState extends State<WordCardView>
+    with ConsumerStateMixin<WordCardView>, SingleTickerProviderStateMixin {
   late final AnimationController _c;
 
   @override void initState() {
