@@ -17,8 +17,8 @@ class GameLobbyView extends ConsumerStatefulWidget {
   const GameLobbyView({super.key});
   @override ConsumerState<GameLobbyView> createState() => _GameLobbyViewState();
 }
-class _GameLobbyViewState extends ConsumerState<GameLobbyView>
-    with SingleTickerProviderStateMixin {
+class _GameLobbyViewState extends State<GameLobbyView>
+    with ConsumerStateMixin<GameLobbyView>, SingleTickerProviderStateMixin {
   late final AnimationController _pulse;
 
   @override void initState() {
