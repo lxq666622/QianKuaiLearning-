@@ -15,8 +15,8 @@ class XingHuiInteractionView extends ConsumerStatefulWidget {
   const XingHuiInteractionView({super.key});
   @override ConsumerState<XingHuiInteractionView> createState() => _XHState();
 }
-class _XHState extends ConsumerState<XingHuiInteractionView>
-    with SingleTickerProviderStateMixin {
+class _XHState extends State<XingHuiInteractionView>
+    with ConsumerStateMixin<XingHuiInteractionView>, SingleTickerProviderStateMixin {
   // 抽屉上滑展开
   double _drawerOffset = 0;
   double _startDy = 0;
@@ -405,7 +405,7 @@ class _TypingDrawerContent extends ConsumerStatefulWidget {
   const _TypingDrawerContent();
   @override ConsumerState<_TypingDrawerContent> createState() => _TDCState();
 }
-class _TDCState extends ConsumerState<_TypingDrawerContent> {
+class _TDCState extends State<_TypingDrawerContent> with ConsumerStateMixin<_TypingDrawerContent> {
   final _tc = TextEditingController();
   final _sc = ScrollController();
   @override void dispose() { _tc.dispose(); _sc.dispose(); super.dispose(); }
@@ -568,8 +568,7 @@ class _VoiceOverlayContent extends ConsumerStatefulWidget {
   const _VoiceOverlayContent();
   @override ConsumerState<_VoiceOverlayContent> createState() => _VOCState();
 }
-class _VOCState extends ConsumerState<_VoiceOverlayContent> with SingleTickerProviderStateMixin {
-  bool _callActive = false;
+class _VOCState extends State<_VoiceOverlayContent> with ConsumerStateMixin<_VoiceOverlayContent>, SingleTickerProviderStateMixin {  bool _callActive = false;
   late final AnimationController _emotionBlink;
   int _seconds = 0;
   Timer? _timer;
