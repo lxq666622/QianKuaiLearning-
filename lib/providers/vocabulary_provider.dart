@@ -84,7 +84,7 @@ class VocabularyNotifier extends StateNotifier<VocabularyState> {
         word: e.word, meaning: '',
         exampleSentence: e.exampleSentence,
         source: source, frequency: e.frequency,
-        nextReviewDate: DateTime.now(), isUserAdded: 1,
+        nextReviewDate: DateTime.now(), isUserAdded: true,
       );
     }).toList();
     await _db.batchInsertWords(data);
