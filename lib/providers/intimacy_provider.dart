@@ -40,7 +40,7 @@ class IntimacyState {
 
 class IntimacyNotifier extends StateNotifier<IntimacyState> {
   final DatabaseService _db = DatabaseService.instance;
-  IntimacyNotifier() : super(const IntimacyState()) { _load(); }
+  IntimacyNotifier() : super(const IntimacyState(value: 0)) { _load(); }
   bool _dailyFirstMet = false; // 每日首次找他（内存，重启清）
 
   Future<void> _load() async {
