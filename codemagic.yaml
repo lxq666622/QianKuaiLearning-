@@ -87,7 +87,7 @@ workflows:
             fi
             sed -i.bak 's|android:name=".*MainActivity"|android:name="io.flutter.embedding.android.FlutterFragmentActivity"|g' android/app/src/main/AndroidManifest.xml || true
           fi
-      - name: Step 4 - Flutter clean and pub get
+      - name: Step 4 - Flutter clean and pub get (FULL LOG printed if fail)
         script: |
           set -ex
           source /tmp/project_dir.sh
@@ -98,9 +98,23 @@ workflows:
           echo "=== Final verification BEFORE build (lib/main.dart head 10 lines, MUST show import app.dart! not Demo!) ==="
           head -10 lib/main.dart
           flutter clean || true
-          echo "Running flutter pub get"
-          flutter pub get 2>&1 | tail -80
-      - name: Step 5 - Build Android APK (release, GLOBAL FIND + copy to /tmp GUARANTEE artifact)
+          echo "=== Running flutter pub get (FULL LOG saved to /tmp/pub_get.log) ==="
+          set +e
+          flutter pub get > /tmp/pub_get.log 2>&1
+          PUB_RC=$?
+          set -e
+          echo "=== flutter pub get exited with rc=$PUB_RC ==="
+          echo "=== pub_get.log total lines: $(wc -l < /tmp/pub_get.log) ==="
+          if [ $PUB_RC -ne 0 ]; then
+            echo "❌❌❌ flutter pub get FAILED! Printing FULL PUB GET LOG (all lines):"
+            cat /tmp/pub_get.log
+            echo "❌❌❌ END of FULL pub get log"
+            exit 3
+          else
+            echo "✅✅✅ flutter pub get SUCCESS! Printing LAST 120 lines:"
+            tail -120 /tmp/pub_get.log
+          fi
+      - name: Step 5 - Build Android APK (release, FULL LOG printed if fail + size check >5MB)
         script: |
           set -ex
           source /tmp/project_dir.sh
@@ -112,21 +126,37 @@ workflows:
           flutter build apk --release --no-tree-shake-icons > /tmp/build_apk.log 2>&1
           APK_RC=$?
           set -e
-          echo "=== APK build last 120 lines ==="
-          tail -120 /tmp/build_apk.log
-          echo "APK build exited with rc=$APK_RC"
+          echo "=== APK build exited with rc=$APK_RC ==="
+          echo "=== build_apk.log total lines: $(wc -l < /tmp/build_apk.log) ==="
+          if [ $APK_RC -ne 0 ]; then
+            echo "❌❌❌ APK BUILD FAILED! Printing FULL LOG (first 200 + last 250 lines):"
+            echo "--- FIRST 200 lines ---"
+            head -200 /tmp/build_apk.log
+            echo "--- LAST 250 lines ---"
+            tail -250 /tmp/build_apk.log
+            echo "❌❌❌ END of APK build log"
+          else
+            echo "✅✅✅ APK BUILD SUCCESS rc=0! Printing LAST 200 lines:"
+            tail -200 /tmp/build_apk.log
+          fi
           echo "=== GLOBALLY searching for any app-release.apk under REPO_ROOT ($REPO_ROOT) ==="
           APK_FOUND=$(find "$REPO_ROOT" -name "app-release.apk" -type f 2>/dev/null | head -1)
           if [ -n "$APK_FOUND" ]; then
-            echo "SUCCESS: APK FOUND at: $APK_FOUND ($(wc -c < "$APK_FOUND") bytes)"
-            cp -f "$APK_FOUND" /tmp/app-release.apk
-            echo "COPIED to /tmp/app-release.apk: $(wc -c < /tmp/app-release.apk) bytes (artifact GUARANTEED!)"
+            APK_SIZE=$(wc -c < "$APK_FOUND")
+            echo "APK FOUND at: $APK_FOUND ($APK_SIZE bytes)"
+            if [ $APK_SIZE -gt 5000000 ]; then
+              echo "✅ APK size >5MB, REAL artifact. Copying to /tmp."
+              cp -f "$APK_FOUND" /tmp/app-release.apk
+              echo "COPIED to /tmp/app-release.apk: $(wc -c < /tmp/app-release.apk) bytes"
+            else
+              echo "❌ APK too small ($APK_SIZE bytes <5MB), FAKE artifact. IGNORING. Check APK build log!"
+              APK_FOUND=""
+            fi
           else
-            echo "WARN: APK not found globally, listing build dirs:"
-            find "$REPO_ROOT" -name "*.apk" 2>/dev/null || true
+            echo "WARN: APK not found globally."
             find "$REPO_ROOT" -maxdepth 8 -type d -name "flutter-apk" 2>/dev/null || true
           fi
-      - name: Step 6 - Build iOS IPA (no code signing, GLOBAL FIND Runner.app + pack IPA to /tmp GUARANTEE artifact!)
+      - name: Step 6 - Build iOS IPA (FULL LOG if fail + RUNNER APP SIZE CHECK >15MB! NO MORE 332B FAKE IPA!)
         script: |
           set -ex
           source /tmp/project_dir.sh
@@ -138,32 +168,63 @@ workflows:
           flutter build ios --release --no-codesign --no-tree-shake-icons > /tmp/build_ios.log 2>&1
           IOS_RC=$?
           set -e
-          echo "=== iOS build last 120 lines ==="
-          tail -120 /tmp/build_ios.log
-          echo "iOS build exited with rc=$IOS_RC"
+          echo "=== iOS build exited with rc=$IOS_RC ==="
+          echo "=== build_ios.log total lines: $(wc -l < /tmp/build_ios.log) ==="
+          if [ $IOS_RC -ne 0 ]; then
+            echo "❌❌❌ iOS BUILD FAILED (rc=$IOS_RC)! Printing FULL LOG (first 300 + last 350 lines):"
+            echo "--- FIRST 300 lines (THE REAL ERROR IS HERE! NOT AT THE END!) ---"
+            head -300 /tmp/build_ios.log
+            echo "--- LAST 350 lines ---"
+            tail -350 /tmp/build_ios.log
+            echo "❌❌❌ END of iOS build log. Scroll up to FIRST 300 lines for REAL ERROR!"
+          else
+            echo "✅✅✅ iOS BUILD SUCCESS rc=0! Printing LAST 250 lines:"
+            tail -250 /tmp/build_ios.log
+          fi
           echo "=== GLOBALLY searching for Runner.app under REPO_ROOT ($REPO_ROOT) ==="
           RUNNER_FOUND=$(find "$REPO_ROOT" -name "Runner.app" -type d 2>/dev/null | head -1)
           if [ -n "$RUNNER_FOUND" ]; then
-            echo "SUCCESS: Runner.app FOUND at: $RUNNER_FOUND"
-            RUNNER_PARENT=$(dirname "$RUNNER_FOUND")
-            echo "Runner.app parent dir: $RUNNER_PARENT"
-            mkdir -p "$RUNNER_PARENT/Payload"
-            cp -R "$RUNNER_FOUND" "$RUNNER_PARENT/Payload/"
-            cd "$RUNNER_PARENT" && rm -f QianKuaiLearning_unsigned.ipa && zip -r QianKuaiLearning_unsigned.ipa Payload
-            echo "SUCCESS: IPA created at $(pwd)/QianKuaiLearning_unsigned.ipa ($(wc -c < QianKuaiLearning_unsigned.ipa) bytes)"
-            cp -f "$RUNNER_PARENT/QianKuaiLearning_unsigned.ipa" /tmp/QianKuaiLearning_unsigned.ipa
-            echo "COPIED IPA to /tmp/QianKuaiLearning_unsigned.ipa: $(wc -c < /tmp/QianKuaiLearning_unsigned.ipa) bytes (artifact GUARANTEED!)"
+            echo "Found Runner.app directory at: $RUNNER_FOUND"
+            echo "--- du -sb Runner.app total size ---"
+            RUNNER_BYTES=$(du -sb "$RUNNER_FOUND" | awk '{print $1}')
+            echo "Runner.app total size on disk: $RUNNER_BYTES bytes ($(du -sh "$RUNNER_FOUND" | cut -f1))"
+            # CRITICAL SIZE CHECK: Real compiled QianKuaiLearning Runner.app is ALWAYS >15MB!
+            # If <15MB, it's the EMPTY failure stub dir (we saw stored 0% → 332B fake IPA). WE WILL NOT PACK IT!
+            if [ $RUNNER_BYTES -gt 15000000 ]; then
+              echo "✅✅✅ Runner.app size >15MB! REAL compiled app! Packing IPA NOW!"
+              RUNNER_PARENT=$(dirname "$RUNNER_FOUND")
+              echo "Runner.app parent dir: $RUNNER_PARENT"
+              mkdir -p "$RUNNER_PARENT/Payload"
+              cp -R "$RUNNER_FOUND" "$RUNNER_PARENT/Payload/"
+              cd "$RUNNER_PARENT" && rm -f QianKuaiLearning_unsigned.ipa && zip -r QianKuaiLearning_unsigned.ipa Payload
+              IPA_BYTES=$(wc -c < QianKuaiLearning_unsigned.ipa)
+              echo "SUCCESS: IPA created at $(pwd)/QianKuaiLearning_unsigned.ipa ($IPA_BYTES bytes)"
+              if [ $IPA_BYTES -gt 15000000 ]; then
+                cp -f "$RUNNER_PARENT/QianKuaiLearning_unsigned.ipa" /tmp/QianKuaiLearning_unsigned.ipa
+                echo "COPIED IPA to /tmp/QianKuaiLearning_unsigned.ipa: $(wc -c < /tmp/QianKuaiLearning_unsigned.ipa) bytes (artifact GUARANTEED!)"
+              else
+                echo "❌❌❌ IPA too small (<15MB)! FAKE! Check zip output above."
+              fi
+            else
+              echo "❌❌❌ Runner.app TOO SMALL ($RUNNER_BYTES bytes <15MB)!"
+              echo "IT'S THE EMPTY FAILURE STUB (the one that gave 332B fake IPA with stored 0%)."
+              echo "REFUSING TO PACK FAKE IPA. iOS build FAILED!"
+              echo "=> THE REAL COMPILE ERROR IS PRINTED ABOVE IN THE FIRST 300 LINES OF build_ios.log!"
+              echo "=> Artifacts will still contain /tmp/build_ios.log so we can debug the real error."
+            fi
           else
-            echo "WARN: Runner.app NOT FOUND globally under $REPO_ROOT, listing build dirs:"
+            echo "WARN: Runner.app directory NOT FOUND globally under $REPO_ROOT"
             find "$REPO_ROOT" -maxdepth 8 -type d -name "iphoneos" 2>/dev/null
-            find "$REPO_ROOT" -maxdepth 8 -type d -name "build" 2>/dev/null
+            find "$REPO_ROOT" -maxdepth 8 -type d -name "Release-iphoneos" 2>/dev/null
           fi
     artifacts:
       - "**/build/app/outputs/flutter-apk/app-release.apk"
       - "**/build/ios/iphoneos/QianKuaiLearning_unsigned.ipa"
+      - "**/build/ios/Release-iphoneos/QianKuaiLearning_unsigned.ipa"
       - "**/build/ios/iphoneos/Runner.app"
       - /tmp/QianKuaiLearning_unsigned.ipa
       - /tmp/app-release.apk
+      - /tmp/pub_get.log
       - /tmp/build_apk.log
       - /tmp/build_ios.log
     publishing:
