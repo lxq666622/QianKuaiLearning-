@@ -2,20 +2,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/all_models.dart';
 import '../services/database_service.dart';
 import '../utils/constants.dart';
-// ==========================================================================
-// 亲密度 / 羁绊状态（需求#9.3）
-// - 羁绊等级：1-20，每升一级 = level*100 羁绊值
-// - 触发累积：对话+2 / 每日首找+10 / 副本完成分享+15 / 5分钟内回复推送+20 /
-//             连击7天+50 / 新成就告知+10 / 歌房分享+10 / 关心生病+15
-// ==========================================================================
+
 class IntimacyState {
   final int value;
   final int level;
   final int totalChatRounds;
   final int daysKnown;
-  final int? levelUpFrom; // 升级弹窗
+  final int? levelUpFrom;
   final List<IntimacyUnlockModel> unlocks;
-  final List<String> recentlyAdded; // +2 +10 ...飘字
+  final List<String> recentlyAdded;
   const IntimacyState({
     required this.value, this.level=1,
     this.totalChatRounds=0, this.daysKnown=1,
@@ -36,9 +31,9 @@ class IntimacyState {
     recentlyAdded: recentlyAdded ?? this.recentlyAdded,
   );
 }
+
 class IntimacyNotifier extends StateNotifier<IntimacyState> {
   final DatabaseService _db = DatabaseService.instance;
-  // 🔧 保险模式：自己的生命周期标记
   bool _alive = true;
   IntimacyNotifier() : super(const IntimacyState(value: 0)) { _load(); }
 
@@ -48,7 +43,7 @@ class IntimacyNotifier extends StateNotifier<IntimacyState> {
     super.dispose();
   }
 
-  bool _dailyFirstMet = false; // 每日首次找他（内存，重启清）
+  bool _dailyFirstMet = false;
   Future<void> _load() async {
     final s = await _db.getXHSettings();
     final u = await _db.getIntimacyUnlocks();
@@ -58,7 +53,7 @@ class IntimacyNotifier extends StateNotifier<IntimacyState> {
       unlocks: u,
     );
   }
-  // ========== 加羁绊值（核心入口） ==========
+
   Future<void> add(int delta, {String reason=''}) async {
     if (delta <= 0) return;
     final settings = await _db.getXHSettings();
@@ -73,7 +68,6 @@ class IntimacyNotifier extends StateNotifier<IntimacyState> {
           (reason == 'chat_round' ? 1 : 0),
     );
     await _db.saveXHSettings(updated);
-    // 解锁
     if (lv > from) {
       for (int i = from + 1; i <= lv; i++) {
         await _db.setIntimacyUnlocked(i);
@@ -90,40 +84,33 @@ class IntimacyNotifier extends StateNotifier<IntimacyState> {
       clearLevelUp: lv <= from,
     );
     Future.delayed(const Duration(milliseconds: 1200), () {
-      // 🔧 保险模式：用 _alive 替代 mounted
       if (_alive) {
         super.state = super.state.copyWith(recentlyAdded: []);
       }
     });
   }
   static int _needFor(int level) {
-    // Lv.2 需要 200，Lv.3 300，… Lv.N = N*100
     return level * 100;
   }
   int needForNext() => _needFor(super.state.level + 1);
   int needAtLevel(int level) => _needFor(level);
-  // 1轮对话结束（双方各1句）
+
   Future<void> onChatRoundEnd() async {
     int extra = 0;
     if (!_dailyFirstMet) { _dailyFirstMet = true; extra = 10; }
     await add(2 + extra, reason: 'chat_round');
   }
-  // 分享副本完成
   Future<void> onDungeonShared() async => add(15, reason: '副本完成');
-  // 歌房分享
   Future<void> onSongShared() async => add(10, reason: '练唱分享');
-  // 连续打卡7天加成
   Future<void> onWeekStreak() async => add(50, reason: '七日连击');
-  // 新成就
   Future<void> onAchievementUnlocked() async => add(10, reason: '解锁成就');
-  // 关心他
   Future<void> onCareAsked() async => add(15, reason: '关心');
-  // 5分钟内回复推送
   Future<void> onReplyWithin5Min(int delta) async {
     if (delta > 0) add(delta, reason: '秒回推送');
   }
   void clearLevelUp() => super.state = super.state.copyWith(clearLevelUp: true);
 }
+
 final intimacyProvider = StateNotifierProvider<IntimacyNotifier, IntimacyState>(
   (ref) => IntimacyNotifier(),
 );
