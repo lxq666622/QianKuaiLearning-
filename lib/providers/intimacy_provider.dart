@@ -2,7 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/all_models.dart';
 import '../services/database_service.dart';
 import '../utils/constants.dart';
-
 // ==========================================================================
 // 亲密度 / 羁绊状态（需求#9.3）
 // - 羁绊等级：1-20，每升一级 = level*100 羁绊值
@@ -37,22 +36,28 @@ class IntimacyState {
     recentlyAdded: recentlyAdded ?? this.recentlyAdded,
   );
 }
-
 class IntimacyNotifier extends StateNotifier<IntimacyState> {
   final DatabaseService _db = DatabaseService.instance;
+  // 🔧 保险模式：自己的生命周期标记
+  bool _alive = true;
   IntimacyNotifier() : super(const IntimacyState(value: 0)) { _load(); }
-  bool _dailyFirstMet = false; // 每日首次找他（内存，重启清）
 
+  @override
+  void dispose() {
+    _alive = false;
+    super.dispose();
+  }
+
+  bool _dailyFirstMet = false; // 每日首次找他（内存，重启清）
   Future<void> _load() async {
     final s = await _db.getXHSettings();
     final u = await _db.getIntimacyUnlocks();
-    state = IntimacyState(
+    super.state = IntimacyState(
       value: s.intimacyValue, level: s.intimacyLevel,
       totalChatRounds: s.totalChatRounds, daysKnown: s.daysKnown,
       unlocks: u,
     );
   }
-
   // ========== 加羁绊值（核心入口） ==========
   Future<void> add(int delta, {String reason=''}) async {
     if (delta <= 0) return;
@@ -75,29 +80,28 @@ class IntimacyNotifier extends StateNotifier<IntimacyState> {
       }
     }
     final unlocks = await _db.getIntimacyUnlocks();
-    state = state.copyWith(
+    super.state = super.state.copyWith(
       value: v, level: lv,
       totalChatRounds: updated.totalChatRounds,
       levelUpFrom: lv > from ? from : null,
       unlocks: unlocks,
-      recentlyAdded: [...state.recentlyAdded, reason == 'chat_round'
+      recentlyAdded: [...super.state.recentlyAdded, reason == 'chat_round'
           ? '+2' : reason.isEmpty ? '+$delta' : '+$delta $reason'].cast<String>(),
       clearLevelUp: lv <= from,
     );
     Future.delayed(const Duration(milliseconds: 1200), () {
-      if (mounted) {
-        state = state.copyWith(recentlyAdded: []);
+      // 🔧 保险模式：用 _alive 替代 mounted
+      if (_alive) {
+        super.state = super.state.copyWith(recentlyAdded: []);
       }
     });
   }
-
   static int _needFor(int level) {
     // Lv.2 需要 200，Lv.3 300，… Lv.N = N*100
     return level * 100;
   }
-  int needForNext() => _needFor(state.level + 1);
+  int needForNext() => _needFor(super.state.level + 1);
   int needAtLevel(int level) => _needFor(level);
-
   // 1轮对话结束（双方各1句）
   Future<void> onChatRoundEnd() async {
     int extra = 0;
@@ -118,9 +122,8 @@ class IntimacyNotifier extends StateNotifier<IntimacyState> {
   Future<void> onReplyWithin5Min(int delta) async {
     if (delta > 0) add(delta, reason: '秒回推送');
   }
-  void clearLevelUp() => state = state.copyWith(clearLevelUp: true);
+  void clearLevelUp() => super.state = super.state.copyWith(clearLevelUp: true);
 }
-
 final intimacyProvider = StateNotifierProvider<IntimacyNotifier, IntimacyState>(
   (ref) => IntimacyNotifier(),
 );
