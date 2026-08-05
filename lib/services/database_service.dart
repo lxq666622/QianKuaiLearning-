@@ -150,7 +150,7 @@ class DatabaseService {
     await _injectSampleData(db);
   }
 
-  ========= 预置数据注入（首次启动）===========================================
+ // ========= 预置数据注入（首次启动）===========================================
   Future<void> _injectSampleData(Database db) async {
     final b = db.batch();
     // 玩家默认
