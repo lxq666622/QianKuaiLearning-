@@ -52,7 +52,7 @@ workflows:
           cd "$PROJECT_DIR"
           echo "Working dir: $(pwd)"
           ls -la
-          echo "=== lib/main.dart first 5 lines ==="
+          echo "=== lib/main.dart first 5 lines (should be QianKuaiLearning NOT Demo counter) ==="
           head -5 lib/main.dart
           for f in pubspec.yaml lib/main.dart lib/app.dart; do
             if [ -f "$f" ]; then echo "OK: found $f ($(wc -c < $f) bytes)"; else echo "FAIL: MISSING $f"; fi
@@ -67,7 +67,7 @@ workflows:
           rm -rf /tmp/lib_backup
           cp -R lib /tmp/lib_backup
           echo "Backup size: $(du -sh /tmp/lib_backup | cut -f1)"
-          echo "Backup lib/main.dart first 3 lines (should be QianKuaiLearning real main, not Demo counter):"
+          echo "Backup lib/main.dart first 3 lines:"
           head -3 /tmp/lib_backup/main.dart
           if [ ! -d android ] || [ ! -d ios ] || [ ! -f ios/Runner.xcodeproj/project.pbxproj ]; then
             echo "Running flutter create --platforms=android,ios --org com.qiankuai.learning --project-name qiankuailearning ."
@@ -95,16 +95,18 @@ workflows:
           export PUB_CACHE="$HOME/.pub-cache"
           mkdir -p "$PUB_CACHE"
           cd "$PROJECT_DIR"
-          echo "=== Final verification of lib/main.dart BEFORE build (should be real QianKuaiLearning NOT Demo) ==="
+          echo "=== Final verification BEFORE build (lib/main.dart head 10 lines, MUST show import app.dart! not Demo!) ==="
           head -10 lib/main.dart
           flutter clean || true
           echo "Running flutter pub get"
           flutter pub get 2>&1 | tail -80
-      - name: Step 5 - Build Android APK (release, full log on error)
+      - name: Step 5 - Build Android APK (release, GLOBAL FIND + copy to /tmp GUARANTEE artifact)
         script: |
           set -ex
           source /tmp/project_dir.sh
           if [ -n "$FLUTTER_ROOT" ]; then export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"; fi
+          REPO_ROOT="$(pwd)"
+          echo "REPO_ROOT=$REPO_ROOT"
           cd "$PROJECT_DIR"
           set +e
           flutter build apk --release --no-tree-shake-icons > /tmp/build_apk.log 2>&1
@@ -113,17 +115,24 @@ workflows:
           echo "=== APK build last 120 lines ==="
           tail -120 /tmp/build_apk.log
           echo "APK build exited with rc=$APK_RC"
-          if [ -f build/app/outputs/flutter-apk/app-release.apk ]; then
-            echo "SUCCESS: APK found at $(pwd)/build/app/outputs/flutter-apk/app-release.apk ($(wc -c < build/app/outputs/flutter-apk/app-release.apk) bytes)"
+          echo "=== GLOBALLY searching for any app-release.apk under REPO_ROOT ($REPO_ROOT) ==="
+          APK_FOUND=$(find "$REPO_ROOT" -name "app-release.apk" -type f 2>/dev/null | head -1)
+          if [ -n "$APK_FOUND" ]; then
+            echo "SUCCESS: APK FOUND at: $APK_FOUND ($(wc -c < "$APK_FOUND") bytes)"
+            cp -f "$APK_FOUND" /tmp/app-release.apk
+            echo "COPIED to /tmp/app-release.apk: $(wc -c < /tmp/app-release.apk) bytes (artifact GUARANTEED!)"
           else
-            echo "WARN: APK not found, searching build dir:"
-            find build -name "*.apk" 2>/dev/null || true
+            echo "WARN: APK not found globally, listing build dirs:"
+            find "$REPO_ROOT" -name "*.apk" 2>/dev/null || true
+            find "$REPO_ROOT" -maxdepth 8 -type d -name "flutter-apk" 2>/dev/null || true
           fi
-      - name: Step 6 - Build iOS IPA (no code signing, package to IPA zip)
+      - name: Step 6 - Build iOS IPA (no code signing, GLOBAL FIND Runner.app + pack IPA to /tmp GUARANTEE artifact!)
         script: |
           set -ex
           source /tmp/project_dir.sh
           if [ -n "$FLUTTER_ROOT" ]; then export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"; fi
+          REPO_ROOT="$(pwd)"
+          echo "REPO_ROOT=$REPO_ROOT"
           cd "$PROJECT_DIR"
           set +e
           flutter build ios --release --no-codesign --no-tree-shake-icons > /tmp/build_ios.log 2>&1
@@ -132,22 +141,29 @@ workflows:
           echo "=== iOS build last 120 lines ==="
           tail -120 /tmp/build_ios.log
           echo "iOS build exited with rc=$IOS_RC"
-          echo "Looking for Runner.app:"
-          find build -name "Runner.app" -type d 2>/dev/null | head -5
-          if [ -d build/ios/iphoneos/Runner.app ]; then
-            echo "SUCCESS: Runner.app found, packaging IPA"
-            mkdir -p build/ios/iphoneos/Payload
-            cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
-            cd build/ios/iphoneos && zip -r QianKuaiLearning_unsigned.ipa Payload
+          echo "=== GLOBALLY searching for Runner.app under REPO_ROOT ($REPO_ROOT) ==="
+          RUNNER_FOUND=$(find "$REPO_ROOT" -name "Runner.app" -type d 2>/dev/null | head -1)
+          if [ -n "$RUNNER_FOUND" ]; then
+            echo "SUCCESS: Runner.app FOUND at: $RUNNER_FOUND"
+            RUNNER_PARENT=$(dirname "$RUNNER_FOUND")
+            echo "Runner.app parent dir: $RUNNER_PARENT"
+            mkdir -p "$RUNNER_PARENT/Payload"
+            cp -R "$RUNNER_FOUND" "$RUNNER_PARENT/Payload/"
+            cd "$RUNNER_PARENT" && rm -f QianKuaiLearning_unsigned.ipa && zip -r QianKuaiLearning_unsigned.ipa Payload
             echo "SUCCESS: IPA created at $(pwd)/QianKuaiLearning_unsigned.ipa ($(wc -c < QianKuaiLearning_unsigned.ipa) bytes)"
+            cp -f "$RUNNER_PARENT/QianKuaiLearning_unsigned.ipa" /tmp/QianKuaiLearning_unsigned.ipa
+            echo "COPIED IPA to /tmp/QianKuaiLearning_unsigned.ipa: $(wc -c < /tmp/QianKuaiLearning_unsigned.ipa) bytes (artifact GUARANTEED!)"
           else
-            echo "WARN: Runner.app not found under build/ios/iphoneos, listing build dir:"
-            find build -maxdepth 6 -type d 2>/dev/null | tail -60
+            echo "WARN: Runner.app NOT FOUND globally under $REPO_ROOT, listing build dirs:"
+            find "$REPO_ROOT" -maxdepth 8 -type d -name "iphoneos" 2>/dev/null
+            find "$REPO_ROOT" -maxdepth 8 -type d -name "build" 2>/dev/null
           fi
     artifacts:
       - "**/build/app/outputs/flutter-apk/app-release.apk"
       - "**/build/ios/iphoneos/QianKuaiLearning_unsigned.ipa"
       - "**/build/ios/iphoneos/Runner.app"
+      - /tmp/QianKuaiLearning_unsigned.ipa
+      - /tmp/app-release.apk
       - /tmp/build_apk.log
       - /tmp/build_ios.log
     publishing:
