@@ -1,7 +1,7 @@
 workflows:
   default-workflow:
     name: Default Workflow
-    max_build_duration: 60
+    max_build_duration: 90
     instance_type: mac_mini_m2
     environment:
       flutter: 3.19.6
@@ -25,91 +25,134 @@ workflows:
         - pattern: "main"
           include: true
     scripts:
-      - name: Step 0 - Prepare Flutter SDK
+      - name: Step 0 - Flutter SDK path
         script: |
-          set -ex
+          set -e
           if [ -n "$FLUTTER_ROOT" ] && [ -x "$FLUTTER_ROOT/bin/flutter" ]; then
             export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"
-          elif command -v flutter >/dev/null 2>&1; then
-            echo "Flutter on PATH: $(which flutter)"
-          else
+          elif ! command -v flutter >/dev/null 2>&1; then
             for d in "$HOME/programs/flutter" "/usr/local/share/flutter" "/opt/flutter"; do
-              if [ -x "$d/bin/flutter" ]; then export PATH="$d/bin:$d/bin/cache/dart-sdk/bin:$PATH"; break; fi
+              if [ -x "$d/bin/flutter" ]; then
+                export PATH="$d/bin:$d/bin/cache/dart-sdk/bin:$PATH"
+                break
+              fi
             done
           fi
+          echo "$PATH" > /tmp/flutter_path.env
+          echo "export PATH=\"$PATH\"" > /tmp/flutter_path.sh
           flutter --version
-      - name: Step 1 - Auto detect project dir
+      - name: Step 1 - Find pubspec.yaml project root
         script: |
-          set -ex
-          DETECTED=$(find "$(pwd)" -name "pubspec.yaml" -not -path "*/build/*" -not -path "*/.dart_tool/*" | head -1)
-          if [ -z "$DETECTED" ]; then echo "FATAL: pubspec.yaml NOT FOUND"; exit 2; fi
+          set -e
+          DETECTED=$(find "$(pwd)" -name "pubspec.yaml" -not -path "*/build/*" -not -path "*/.dart_tool/*" -not -path "*/.symlinks/*" | head -1)
+          if [ -z "$DETECTED" ]; then
+            echo "FATAL: pubspec.yaml not found in repo"
+            exit 2
+          fi
           PROJECT_DIR=$(dirname "$DETECTED")
-          echo "Detected PROJECT_DIR=$PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR"
           echo "export PROJECT_DIR=\"$PROJECT_DIR\"" > /tmp/project_dir.sh
       - name: Step 2 - Verify files
         script: |
-          set -ex
+          set -e
           source /tmp/project_dir.sh
+          source /tmp/flutter_path.sh
           cd "$PROJECT_DIR"
+          echo "pwd=$(pwd)"
+          echo "=== lib/main.dart first 5 lines ==="
           head -5 lib/main.dart
           for f in pubspec.yaml lib/main.dart lib/app.dart; do
-            [ -f "$f" ] && echo "OK: $f" || echo "MISSING: $f"
-          done
-      - name: Step 3 - Create android/ios + RESTORE lib + Podfile iOS13 + PATCH PBXPROJ REMOVE SIGNING
-        script: |
-          set -ex
-          source /tmp/project_dir.sh
-          if [ -n "$FLUTTER_ROOT" ]; then export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"; fi
-          cd "$PROJECT_DIR"
-          rm -rf /tmp/lib_backup && cp -R lib /tmp/lib_backup
-          if [ ! -d ios ] || [ ! -f ios/Runner.xcodeproj/project.pbxproj ]; then
-            flutter create --platforms=android,ios --org com.qiankuai.learning --project-name qiankuailearning . --overwrite 2>&1 | tail -80 || true
-          fi
-          rm -rf lib && cp -R /tmp/lib_backup lib
-          echo "lib/main.dart restored (first 5 lines):" && head -5 lib/main.dart
-          # Android Embedding V2 (audioplayers)
-          if [ -f android/app/src/main/AndroidManifest.xml ]; then
-            if ! grep -q "flutterEmbedding" android/app/src/main/AndroidManifest.xml; then
-              awk '/<application>/ {print; print "        <meta-data android:name=\"flutterEmbedding\" android:value=\"2\" />"; next}1' android/app/src/main/AndroidManifest.xml > /tmp/manifest_patched.xml
-              mv /tmp/manifest_patched.xml android/app/src/main/AndroidManifest.xml
+            if [ -f "$f" ]; then
+              echo "OK: $f ($(wc -c < $f) bytes)"
+            else
+              echo "MISSING: $f"
+              exit 2
             fi
+          done
+      - name: Step 3 - Create android ios folders + restore lib + fix build configs
+        script: |
+          set -e
+          source /tmp/project_dir.sh
+          source /tmp/flutter_path.sh
+          cd "$PROJECT_DIR"
+          echo "=== Backup original lib ==="
+          rm -rf /tmp/lib_backup
+          cp -R lib /tmp/lib_backup
+          echo "Backup size: $(du -sh /tmp/lib_backup | cut -f1)"
+          if [ ! -d android ] || [ ! -d ios ] || [ ! -f ios/Runner.xcodeproj/project.pbxproj ]; then
+            echo "=== flutter create to generate android ios folders ==="
+            flutter create --platforms=android,ios --org com.qiankuai.learning --project-name qiankuailearning . --overwrite > /tmp/flutter_create.log 2>&1 || true
+            echo "flutter create last 40 lines:"
+            tail -40 /tmp/flutter_create.log
           fi
-          # Podfile: iOS 13.0 + post_install hook DISABLE SIGNING on ALL pods
+          echo "=== Restore original lib (overwrite Demo counter!) ==="
+          rm -rf lib
+          cp -R /tmp/lib_backup lib
+          echo "=== lib/main.dart RESTORED first 5 lines: ==="
+          head -5 lib/main.dart
+          if [ -f android/app/src/main/AndroidManifest.xml ]; then
+            echo "=== Fix AndroidManifest V2 embedding ==="
+            if ! grep -q "flutterEmbedding" android/app/src/main/AndroidManifest.xml; then
+              awk '/<application>/ {print; print "        <meta-data android:name=\"flutterEmbedding\" android:value=\"2\" />"; next}1' android/app/src/main/AndroidManifest.xml > /tmp/am.xml
+              mv /tmp/am.xml android/app/src/main/AndroidManifest.xml
+            fi
+            sed -i.bak 's|android:name=".*MainActivity"|android:name="io.flutter.embedding.android.FlutterFragmentActivity"|g' android/app/src/main/AndroidManifest.xml || true
+          fi
           if [ -f ios/Podfile ]; then
+            echo "=== Fix Podfile: iOS 13.0 minimum ==="
             sed -i.bak "s|# platform :ios, '.*'|platform :ios, '13.0'|g" ios/Podfile
             sed -i.bak "s|platform :ios, '.*'|platform :ios, '13.0'|g" ios/Podfile
             if ! grep -q "post_install do |installer|" ios/Podfile; then
-              cat >> ios/Podfile << 'EOF'
-post_install do |installer|
-  installer.pods_project.targets.each do |target|
-    flutter_additional_ios_build_settings(target)
-    target.build_configurations.each do |config|
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
-      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
-      config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
-      config.build_settings['EXPANDED_CODE_SIGN_IDENTITY'] = ""
-      config.build_settings['CODE_SIGNING_IDENTITY'] = ""
-      config.build_settings['PROVISIONING_PROFILE_SPECIFIER'] = ""
-    end
-  end
-end
-EOF
+              echo "" >> ios/Podfile
+              echo "post_install do |installer|" >> ios/Podfile
+              echo "  installer.pods_project.targets.each do |target|" >> ios/Podfile
+              echo "    flutter_additional_ios_build_settings(target)" >> ios/Podfile
+              echo "    target.build_configurations.each do |config|" >> ios/Podfile
+              echo "      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'" >> ios/Podfile
+              echo "      config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'" >> ios/Podfile
+              echo "      config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'" >> ios/Podfile
+              echo "      config.build_settings['EXPANDED_CODE_SIGN_IDENTITY'] = ''" >> ios/Podfile
+              echo "      config.build_settings['CODE_SIGNING_IDENTITY'] = ''" >> ios/Podfile
+              echo "      config.build_settings['PROVISIONING_PROFILE_SPECIFIER'] = ''" >> ios/Podfile
+              echo "    end" >> ios/Podfile
+              echo "  end" >> ios/Podfile
+              echo "end" >> ios/Podfile
             fi
+            echo "=== Podfile last 18 lines (post_install): ==="
+            tail -18 ios/Podfile
           fi
-          # PBXPROJ: REMOVE ALL DEVELOPMENT_TEAM / SIGNING LINES, FORCE NO SIGNING
-          PBXPROJ="ios/Runner.xcodeproj/project.pbxproj"
+          PBXPROJ=ios/Runner.xcodeproj/project.pbxproj
           if [ -f "$PBXPROJ" ]; then
+            echo "=== Remove signing lines from project.pbxproj ==="
             sed -i.bak '/DEVELOPMENT_TEAM =/d' "$PBXPROJ"
             sed -i.bak '/PROVISIONING_PROFILE_SPECIFIER =/d' "$PBXPROJ"
             sed -i.bak '/CODE_SIGN_IDENTITY =/d' "$PBXPROJ"
             sed -i.bak '/CODE_SIGN_STYLE =/d' "$PBXPROJ"
-            perl -i -pe 's/(buildSettings = \{)/$1\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;\n\t\t\t\tEXPANDED_CODE_SIGN_IDENTITY = "";\n\t\t\t\tCODE_SIGNING_IDENTITY = "";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "";\n\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 13.0;/g' "$PBXPROJ" || true
+            sed -i.bak '/DEVELOPMENT_TEAM:/d' "$PBXPROJ"
+            sed -i.bak '/PROVISIONING_PROFILE_SPECIFIER:/d' "$PBXPROJ"
+            sed -i.bak '/CODE_SIGN_IDENTITY:/d' "$PBXPROJ"
+            sed -i.bak '/CODE_SIGN_STYLE:/d' "$PBXPROJ"
+            echo "=== Inject CODE_SIGNING_ALLOWED to every buildSettings block ==="
+            awk '{
+              print
+              if (/buildSettings = \{/) {
+                print "\t\t\t\tCODE_SIGNING_ALLOWED = NO;"
+                print "\t\t\t\tCODE_SIGNING_REQUIRED = NO;"
+                print "\t\t\t\tEXPANDED_CODE_SIGN_IDENTITY = \"\";"
+                print "\t\t\t\tCODE_SIGNING_IDENTITY = \"\";"
+                print "\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"\";"
+                print "\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 13.0;"
+              }
+            }' "$PBXPROJ" > /tmp/project_patched.pbxproj
+            mv /tmp/project_patched.pbxproj "$PBXPROJ"
+            SIGN_COUNT=$(grep -c "CODE_SIGNING_ALLOWED = NO" "$PBXPROJ" || true)
+            echo "Injected CODE_SIGNING_ALLOWED=NO into $SIGN_COUNT buildSettings blocks"
           fi
-      - name: Step 4 - Flutter clean + pub get + pod install --repo-update
+      - name: Step 4 - Flutter clean + pub get + pod install
         script: |
-          set -ex
+          set -e
           source /tmp/project_dir.sh
-          if [ -n "$FLUTTER_ROOT" ]; then export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"; fi
+          source /tmp/flutter_path.sh
           cd "$PROJECT_DIR"
           flutter clean || true
           echo "=== flutter pub get ==="
@@ -117,42 +160,68 @@ EOF
           flutter pub get > /tmp/pub_get.log 2>&1
           PUB_RC=$?
           set -e
-          if [ $PUB_RC -ne 0 ]; then echo "PUB GET FAILED! FULL LOG:"; cat /tmp/pub_get.log; exit 3; fi
-          echo "PUB GET SUCCESS"
+          if [ $PUB_RC -ne 0 ]; then
+            echo "ERROR: flutter pub get failed (rc=$PUB_RC). FULL log:"
+            cat /tmp/pub_get.log
+            exit 3
+          fi
+          echo "flutter pub get OK (last 100 lines):"
+          tail -100 /tmp/pub_get.log
           if [ -d ios ] && [ -f ios/Podfile ]; then
-            echo "=== pod install --repo-update (first run may take 3 min!) ==="
+            echo "=== pod install --repo-update in ios/ (first run 2-4 min!) ==="
             cd ios
             set +e
             pod install --repo-update > /tmp/pod_install.log 2>&1
             POD_RC=$?
             set -e
-            if [ $POD_RC -ne 0 ]; then echo "POD INSTALL FAILED! LOG:"; head -200 /tmp/pod_install.log; echo "--- LAST ---"; tail -250 /tmp/pod_install.log; exit 4; fi
-            echo "POD INSTALL SUCCESS"
+            if [ $POD_RC -ne 0 ]; then
+              echo "ERROR: pod install failed (rc=$POD_RC). First 200 + last 300 lines:"
+              echo "--- FIRST 200 ---"
+              head -200 /tmp/pod_install.log
+              echo "--- LAST 300 ---"
+              tail -300 /tmp/pod_install.log
+              exit 4
+            fi
+            echo "pod install OK (last 80 lines):"
+            tail -80 /tmp/pod_install.log
             cd "$PROJECT_DIR"
           fi
-      - name: Step 5 - Build APK (size check >5MB)
+      - name: Step 5 - Build Android APK
         script: |
-          set -ex
+          set -e
           source /tmp/project_dir.sh
-          if [ -n "$FLUTTER_ROOT" ]; then export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"; fi
-          REPO_ROOT="$(pwd)"
+          source /tmp/flutter_path.sh
+          REPO_ROOT=$(pwd)
           cd "$PROJECT_DIR"
           set +e
           flutter build apk --release --no-tree-shake-icons > /tmp/build_apk.log 2>&1
           APK_RC=$?
           set -e
-          if [ $APK_RC -ne 0 ]; then echo "APK FAILED!"; head -200 /tmp/build_apk.log; echo "--- LAST ---"; tail -250 /tmp/build_apk.log; fi
+          echo "APK build exited rc=$APK_RC"
+          if [ $APK_RC -ne 0 ]; then
+            echo "ERROR: APK build failed. FIRST 200 + LAST 300:"
+            echo "--- FIRST 200 ---"
+            head -200 /tmp/build_apk.log
+            echo "--- LAST 300 ---"
+            tail -300 /tmp/build_apk.log
+          fi
           APK_FOUND=$(find "$REPO_ROOT" -name "app-release.apk" -type f 2>/dev/null | head -1)
           if [ -n "$APK_FOUND" ]; then
             APK_SIZE=$(wc -c < "$APK_FOUND")
-            if [ $APK_SIZE -gt 5000000 ]; then cp -f "$APK_FOUND" /tmp/app-release.apk; echo "APK OK: $APK_SIZE bytes"; fi
+            echo "APK found at: $APK_FOUND ($APK_SIZE bytes)"
+            if [ $APK_SIZE -gt 5000000 ]; then
+              cp -f "$APK_FOUND" /tmp/app-release.apk
+              echo "APK copied to /tmp/app-release.apk: $(wc -c < /tmp/app-release.apk) bytes"
+            else
+              echo "APK too small ($APK_SIZE <5MB), FAKE. Ignoring."
+            fi
           fi
-      - name: Step 6 - Build iOS IPA (DOUBLE export signing env vars + Runner size check >15MB)
+      - name: Step 6 - Build iOS IPA (double force signing envs)
         script: |
-          set -ex
+          set -e
           source /tmp/project_dir.sh
-          if [ -n "$FLUTTER_ROOT" ]; then export PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$PATH"; fi
-          REPO_ROOT="$(pwd)"
+          source /tmp/flutter_path.sh
+          REPO_ROOT=$(pwd)
           cd "$PROJECT_DIR"
           export EXPORT_NO_SIGNING=1
           export CODE_SIGNING_ALLOWED=NO
@@ -160,40 +229,52 @@ EOF
           export CODE_SIGNING_IDENTITY=""
           export EXPANDED_CODE_SIGN_IDENTITY=""
           export PROVISIONING_PROFILE_SPECIFIER=""
+          echo "=== flutter build ios --release --no-codesign ==="
           set +e
           flutter build ios --release --no-codesign --no-tree-shake-icons > /tmp/build_ios.log 2>&1
           IOS_RC=$?
           set -e
           echo "iOS build exited rc=$IOS_RC"
           if [ $IOS_RC -ne 0 ]; then
-            echo "iOS BUILD FAILED (rc=$IOS_RC)! FIRST 300 lines (REAL ERROR HERE!):"
+            echo "ERROR: iOS build failed (rc=$IOS_RC). FIRST 300 + LAST 400 lines (REAL ERROR in FIRST 300!):"
+            echo "--- FIRST 300 ---"
             head -300 /tmp/build_ios.log
-            echo "--- LAST 350 lines ---"
-            tail -350 /tmp/build_ios.log
+            echo "--- LAST 400 ---"
+            tail -400 /tmp/build_ios.log
           fi
+          echo "=== Searching for Runner.app ==="
           RUNNER_FOUND=$(find "$REPO_ROOT" -name "Runner.app" -type d 2>/dev/null | head -1)
           if [ -n "$RUNNER_FOUND" ]; then
             RUNNER_BYTES=$(du -sb "$RUNNER_FOUND" | awk '{print $1}')
             echo "Runner.app found at: $RUNNER_FOUND ($RUNNER_BYTES bytes)"
             if [ $RUNNER_BYTES -gt 15000000 ]; then
-              echo "Runner >15MB (REAL! Packing IPA)"
+              echo "Runner >15MB: REAL! Packing IPA now!"
               RUNNER_PARENT=$(dirname "$RUNNER_FOUND")
               mkdir -p "$RUNNER_PARENT/Payload"
               cp -R "$RUNNER_FOUND" "$RUNNER_PARENT/Payload/"
-              cd "$RUNNER_PARENT" && rm -f QianKuaiLearning_unsigned.ipa && zip -r QianKuaiLearning_unsigned.ipa Payload
+              cd "$RUNNER_PARENT"
+              rm -f QianKuaiLearning_unsigned.ipa
+              zip -r QianKuaiLearning_unsigned.ipa Payload > /tmp/zip.log 2>&1
               IPA_BYTES=$(wc -c < QianKuaiLearning_unsigned.ipa)
+              echo "zip exit rc=$?, IPA size: $IPA_BYTES bytes"
+              tail -10 /tmp/zip.log
               if [ $IPA_BYTES -gt 15000000 ]; then
                 cp -f "$RUNNER_PARENT/QianKuaiLearning_unsigned.ipa" /tmp/QianKuaiLearning_unsigned.ipa
-                echo "IPA PACKED SUCCESS! /tmp/QianKuaiLearning_unsigned.ipa: $IPA_BYTES bytes (ARTIFACT GUARANTEED!)"
+                echo "SUCCESS! IPA GUARANTEED at /tmp/QianKuaiLearning_unsigned.ipa ($(wc -c < /tmp/QianKuaiLearning_unsigned.ipa) bytes)"
+              else
+                echo "ERROR: IPA too small (<15MB): $IPA_BYTES bytes. Zip output above."
               fi
             else
-              echo "Runner TOO SMALL: $RUNNER_BYTES bytes <15MB. EMPTY STUB. iOS build FAILED! => Look FIRST 300 lines of build_ios.log above!"
+              echo "ERROR: Runner.app TOO SMALL ($RUNNER_BYTES bytes <15MB). Empty failure stub. iOS build FAILED. Read FIRST 300 lines of build_ios.log ABOVE for the REAL error!"
             fi
+          else
+            echo "Runner.app not found under $REPO_ROOT"
           fi
     artifacts:
       - "**/build/app/outputs/flutter-apk/app-release.apk"
       - "**/build/ios/iphoneos/QianKuaiLearning_unsigned.ipa"
       - "**/build/ios/Release-iphoneos/QianKuaiLearning_unsigned.ipa"
+      - "**/build/ios/iphoneos/Runner.app"
       - /tmp/QianKuaiLearning_unsigned.ipa
       - /tmp/app-release.apk
       - /tmp/pub_get.log
