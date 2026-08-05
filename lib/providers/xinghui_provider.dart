@@ -5,9 +5,6 @@ import '../services/xinghui_ai_engine.dart';
 import '../utils/constants.dart';
 import 'intimacy_provider.dart';
 
-// ==========================================================================
-// 星回对话状态
-// ==========================================================================
 class XingHuiState {
   final XHInteractionMode mode;
   final List<XHMessageModel> messages;
