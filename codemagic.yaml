@@ -20,12 +20,8 @@ workflows:
           FTOOLS="${FLUTTER_ROOT}/packages/flutter_tools/lib/src/ios"
           for f in "$FTOOLS"/*.dart; do
             if grep -q "Development Team" "$f" 2>/dev/null; then
-              python3 -c "
-import sys
-with open(sys.argv[1],'r') as fh: s=fh.read()
-s=s.replace('if (!_isDevelopmentTeamConfigured)', 'if (False and !_isDevelopmentTeamConfigured)')
-with open(sys.argv[1],'w') as fh: fh.write(s)
-" "$f"
+              sed -i "s/if (!_isDevelopmentTeamConfigured)/if (False and !_isDevelopmentTeamConfigured)/g" "$f"
+              echo "Patched $f"
             fi
           done
       - name: Install dependencies
