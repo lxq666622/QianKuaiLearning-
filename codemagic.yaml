@@ -1,1 +1,36 @@
-workflows:  default-workflow:    name: Default Workflow    max_build_duration: 90    instance_type: mac_mini_m2    environment:      flutter: 3.19.6      xcode: latest      cocoapods: default    triggering:      events:        - push      branch_patterns:        - pattern: "main"          include: true    scripts:      - name: Patch Flutter SDK        script: |          set -e          echo "=== Patching Flutter SDK ==="          FTOOLS="${FLUTTER_ROOT}/packages/flutter_tools/lib/src/ios"          if [ -d "$FTOOLS" ]; then            for f in "$FTOOLS"/*.dart; do              if grep -q "Development Team" "$f" 2>/dev/null; then                echo "Patching: $f"                python3 -c "import rewith open('$f','r') as fh: s=fh.read()s=s.replace('if (!_isDevelopmentTeamConfigured)', 'if (False and !_isDevelopmentTeamConfigured)')with open('$f','w') as fh: fh.write(s)print('Patched successfully')"              fi            done          fi          echo "=== Patch done ==="      - name: Install dependencies        script: flutter pub get      - name: Build iOS        script: flutter build ios --no-codesign --release    artifacts:      - build/ios/iphoneos/Runner.app.zipworkflows:  default-workflow:    name: Default Workflow    max_build_duration: 90    instance_type: mac_mini_m2    environment:      flutter: 3.19.6      xcode: latest      cocoapods: default    triggering:      events:        - push      branch_patterns:        - pattern: "main"          include: true    scripts:      - name: Patch Flutter SDK        script: |          set -e          echo "=== Patching Flutter SDK ==="          FTOOLS="${FLUTTER_ROOT}/packages/flutter_tools/lib/src/ios"          if [ -d "$FTOOLS" ]; then            for f in "$FTOOLS"/*.dart; do              if grep -q "Development Team" "$f" 2>/dev/null; then                echo "Patching: $f"                python3 -c "import rewith open('$f','r') as fh: s=fh.read()s=s.replace('if (!_isDevelopmentTeamConfigured)', 'if (False and !_isDevelopmentTeamConfigured)')with open('$f','w') as fh: fh.write(s)print('Patched successfully')"              fi            done          fi          echo "=== Patch done ==="      - name: Install dependencies        script: flutter pub get      - name: Build iOS        script: flutter build ios --no-codesign --release    artifacts:      - build/ios/iphoneos/Runner.app.zip
+workflows:
+  default-workflow:
+    name: Default Workflow
+    max_build_duration: 90
+    instance_type: mac_mini_m2
+    environment:
+      flutter: 3.19.6
+      xcode: latest
+      cocoapods: default
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: "main"
+          include: true
+    scripts:
+      - name: Patch Flutter SDK
+        script: |
+          set -e
+          FTOOLS="${FLUTTER_ROOT}/packages/flutter_tools/lib/src/ios"
+          for f in "$FTOOLS"/*.dart; do
+            if grep -q "Development Team" "$f" 2>/dev/null; then
+              python3 -c "
+import sys
+with open(sys.argv[1],'r') as fh: s=fh.read()
+s=s.replace('if (!_isDevelopmentTeamConfigured)', 'if (False and !_isDevelopmentTeamConfigured)')
+with open(sys.argv[1],'w') as fh: fh.write(s)
+" "$f"
+            fi
+          done
+      - name: Install dependencies
+        script: flutter pub get
+      - name: Build iOS
+        script: flutter build ios --no-codesign --release
+    artifacts:
+      - build/ios/iphoneos/Runner.app.zip
