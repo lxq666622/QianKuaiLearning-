@@ -16,14 +16,13 @@ workflows:
     scripts:
       - name: Patch Flutter SDK
         script: |
-          set -e
-          FTOOLS="${FLUTTER_ROOT}/packages/flutter_tools/lib/src/ios"
-          for f in "$FTOOLS"/*.dart; do
-            if grep -q "Development Team" "$f" 2>/dev/null; then
-              sed -i "s/if (!_isDevelopmentTeamConfigured)/if (False and !_isDevelopmentTeamConfigured)/g" "$f"
-              echo "Patched $f"
-            fi
+          set +e
+          echo "FLUTTER_ROOT=$FLUTTER_ROOT"
+          find "$FLUTTER_ROOT" -name "*.dart" -path "*flutter_tools*" | xargs grep -l "Development Team" 2>/dev/null | while read f; do
+            echo "Patching $f"
+            sed -i "s|if (!_isDevelopmentTeamConfigured)|if (False and !_isDevelopmentTeamConfigured)|g" "$f"
           done
+          echo "=== Patch done ==="
       - name: Install dependencies
         script: flutter pub get
       - name: Build iOS
